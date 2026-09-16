@@ -64,3 +64,11 @@ def test_all_calculator_buttons_are_supported():
 
 def test_analysis_topics_have_content():
     assert set(ANALYSIS) == {"technical", "fundamental", "support", "sessions"}
+
+
+def test_run_again_buttons_keep_calculator_identity():
+    from bot import input_menu
+
+    assert callback_data(input_menu("percentage"))[0] == "calculator:again:percentage"
+    assert callback_data(input_menu("rr"))[0] == "calculator:again:rr"
+    assert callback_data(input_menu("position"))[0] == "calculator:again:position"
