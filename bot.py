@@ -192,9 +192,9 @@ def calculator_menu():
     return kb.as_markup()
 
 
-def input_menu():
+def input_menu(calculator: str):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔁 Run Again", callback_data="calculator:again")
+    kb.button(text="🔁 Run Again", callback_data=f"calculator:again:{calculator}")
     kb.button(text="↩️ Main Menu", callback_data="home")
     kb.adjust(1)
     return kb.as_markup()
@@ -316,30 +316,34 @@ async def position_callback(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "calculator:again")
+@router.callback_query(F.data.startswith("calculator:again:"))
 async def calculator_again_callback(callback: CallbackQuery, state: FSMContext):
-    current = await state.get_state()
-    await callback.answer()
-    if current == CalcState.percentage.state:
-        await callback.message.edit_text(
+    calculator = (callback.data or "").split(":")[-1]
+    prompts = {
+        "percentage": (
+            CalcState.percentage,
             "<b>📐 Percentage Calculator</b>\n\n"
             "Send: <code>value percentage</code>\nExample: <code>2500 1.5</code>",
-            reply_markup=calculator_menu(),
-        )
-    elif current == CalcState.risk_reward.state:
-        await callback.message.edit_text(
+        ),
+        "rr": (
+            CalcState.risk_reward,
             "<b>📏 Risk / Reward Calculator</b>\n\n"
             "Send: <code>risk reward</code>\nExample: <code>50 100</code>",
-            reply_markup=calculator_menu(),
-        )
-    elif current == CalcState.position.state:
-        await callback.message.edit_text(
+        ),
+        "position": (
+            CalcState.position,
             "<b>💰 Position Size Calculator</b>\n\n"
             "Send: <code>account risk_percent stop_distance</code>\nExample: <code>1000 1 50</code>",
-            reply_markup=calculator_menu(),
-        )
-    else:
-        await callback.message.edit_text(CALCULATOR_TEXT, reply_markup=calculator_menu())
+        ),
+    }
+    item = prompts.get(calculator)
+    if not item:
+        await callback.answer("That calculator is unavailable.", show_alert=True)
+        return
+    state_type, prompt = item
+    await state.set_state(state_type)
+    await callback.answer()
+    await callback.message.edit_text(prompt, reply_markup=calculator_menu())
 
 
 def parse_numbers(text: str | None, count: int) -> list[float]:
@@ -358,7 +362,7 @@ async def percentage_calculation(message: Message, state: FSMContext):
         value, pct = parse_numbers(message.text, 2)
         result = value * pct / 100
         await state.clear()
-        await message.answer(f"<b>Result:</b> {result:.2f}", reply_markup=input_menu())
+        await message.answer(f"<b>Result:</b> {result:.2f}", reply_markup=input_menu("percentage"))
     except (ValueError, TypeError):
         await message.answer(
             "That input isn't valid. Please send exactly two numbers, for example: <code>2500 1.5</code>.",
@@ -375,7 +379,7 @@ async def rr_calculation(message: Message, state: FSMContext):
         await state.clear()
         await message.answer(
             f"<b>Risk / Reward:</b> {reward / risk:.2f}R",
-            reply_markup=input_menu(),
+            reply_markup=input_menu("rr"),
         )
     except (ValueError, TypeError):
         await message.answer(
@@ -397,7 +401,7 @@ async def position_calculation(message: Message, state: FSMContext):
             f"<b>Risk amount:</b> {risk_cash:.2f}\n"
             f"<b>Simplified units:</b> {units:.4f}\n\n"
             "This is an educational calculation and not a broker-specific lot calculation.",
-            reply_markup=input_menu(),
+            reply_markup=input_menu("position"),
         )
     except (ValueError, TypeError):
         await message.answer(
