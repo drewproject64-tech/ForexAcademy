@@ -1,74 +1,64 @@
-# Telegram Ads Destination Checklist
+# Telegram Ads Destination Setup
 
-## 1. Use the bot link as the ad destination
+## Destination
 
-The URL field in Telegram Ads must point to the actual Telegram bot. Do not enter `svg`, a GitHub URL, an image file, or a website that is not the advertised bot.
+The promoted URL must point to the actual Telegram bot, not a file, GitHub repository, image, or redirect page.
 
-Use:
+Use the bot's real Telegram URL, for example:
 
 `https://t.me/YOUR_BOT_USERNAME`
 
-For example, if BotFather gave the bot the username `@ForexAcademyTraderBot`, use:
+Replace `YOUR_BOT_USERNAME` with the username configured in BotFather.
 
-`https://t.me/ForexAcademyTraderBot`
+## Before submitting
 
-## 2. Before submitting the ad
+Keep the bot online and manually test:
 
-Open the bot from both Telegram mobile and desktop and test:
+- `/start`
+- `/start campaign123`
+- `/help`
+- Learn Forex and every lesson button
+- Analysis Basics and every topic button
+- Calculators with valid and invalid input
+- Run Again
+- Main Menu
 
-- /start
-- /menu
-- /help
-- /learn
-- /calculators
-- /glossary
-- /risk
-- /about
-- /privacy
-- Main-menu buttons
-- Inline lesson buttons
-- Calculator inputs and results
-- Home buttons
+Test the same flow on Telegram mobile and desktop.
 
-The bot must be online while Telegram reviews the destination.
+## Profile consistency
 
-## 3. Bot profile
+Bot name, username, profile image, About text, Description, /start, /help, menu labels, and ad text should describe the same product.
 
-In BotFather, make sure the bot has:
+The application sets these two commands at startup:
 
-- A professional profile photo
-- A complete About/short description
-- A complete Description
+- `/start` — Open the main menu
+- `/help` — How to use the bot
 
-The application also refreshes the bot command menu and descriptions every time it starts.
+## Deployment
 
-## 4. Recommended ad
+Required:
 
-Ad title:
-Forex Academy Trader
+`BOT_TOKEN`
 
-Ad text:
-Learn forex trading concepts, market analysis basics, risk management, and useful trading tools with Forex Academy Trader.
+Optional:
 
-Destination:
-https://t.me/YOUR_BOT_USERNAME
+`PORT` (defaults to 8080)
+`LOG_LEVEL` (defaults to INFO)
 
-Do not add a second destination link in the ad text.
+Docker starts:
 
-## 5. Deployment
+`python bot.py`
 
-For Render, use a Background Worker for polling when possible. If using a Web Service, the bot now exposes a simple health endpoint using the PORT environment variable.
+For a Render Web Service, the process exposes `/health`. For a Render Background Worker, polling works without the health endpoint being required.
 
-Set:
+## Ad copy
 
-BOT_TOKEN=your_bot_token
+Keep the ad factual and consistent with the actual bot. Do not advertise signals, guaranteed returns, investment results, or features that are not present.
 
-The Docker image starts with:
+Example factual text:
 
-python bot.py
+`Learn forex concepts, analysis basics, and practical trading calculations in Forex Academy Trader.`
 
-## 6. Why the previous rejection happened
+## Important
 
-Telegram says destination bots must be active, technically complete, and respond properly to commands on mobile and desktop. The bot has now been updated with explicit commands, command-menu registration, complete profile text, stronger fallback handling, and a health endpoint.
-
-Telegram also requires the promoted destination to match the ad and does not allow empty or abandoned bots.
+A working repository alone does not prove that the live Telegram destination is active. After deployment, open the real bot and complete the manual journey before submitting the ad.
