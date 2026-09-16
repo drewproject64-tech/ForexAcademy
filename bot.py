@@ -8,14 +8,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, CallbackQuery, Message
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.types import BotCommand, CallbackQuery, ErrorEvent, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 logger = logging.getLogger("forex_academy")
+
+router = Router()
 
 
 @dataclass(frozen=True)
@@ -28,41 +34,105 @@ def load_config() -> Config:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("BOT_TOKEN environment variable is required")
-    return Config(token=token, port=int(os.getenv("PORT", "8080")))
+
+    try:
+        port = int(os.getenv("PORT", "8080"))
+    except ValueError as exc:
+        raise RuntimeError("PORT must be a valid integer") from exc
+
+    if not 1 <= port <= 65535:
+        raise RuntimeError("PORT must be between 1 and 65535")
+
+    return Config(token=token, port=port)
 
 
-router = Router()
-
-HOME_TEXT = (
+WELCOME_TEXT = (
     "<b>📚 Forex Academy Trader</b>\n\n"
-    "A practical educational toolkit for learning forex concepts, market analysis basics, "
-    "risk management, terminology, and simple trading calculations.\n\n"
-    "⚠️ <b>Educational information only.</b> This bot does not guarantee profits "
-    "and does not provide personalized investment advice."
+    "A simple Telegram-native learning tool for forex concepts, "
+    "market analysis basics, and practical trading calculations.\n\n"
+    "<b>Choose a function:</b>\n"
+    "• 📚 Learn Forex — core forex concepts\n"
+    "• 📊 Analysis Basics — understand common analysis methods\n"
+    "• 🧮 Calculators — simple educational calculations\n\n"
+    "⚠️ Educational information only. No profit guarantees or personalized investment advice."
+)
+
+HELP_TEXT = (
+    "<b>Help</b>\n\n"
+    "Use the three buttons in the main menu:\n"
+    "• 📚 <b>Learn Forex</b> — study core concepts.\n"
+    "• 📊 <b>Analysis Basics</b> — review common market-analysis concepts.\n"
+    "• 🧮 <b>Calculators</b> — run simple percentage, risk/reward, or position-size calculations.\n\n"
+    "For a fresh start, send /start. You can return to the main menu from any section."
+)
+
+LEARN_TEXT = (
+    "<b>📚 Learn Forex</b>\n\n"
+    "Choose a topic. Each topic gives a short, educational explanation."
 )
 
 LESSONS = {
-    "forex": "<b>💱 What Is Forex?</b>\n\nForex is the global market where currencies are exchanged. Currency pairs such as EUR/USD show the value of one currency relative to another. Prices can be affected by rates, economic data, central-bank policy, sentiment, and liquidity.",
-    "pairs": "<b>💱 Currency Pairs</b>\n\nMajor, minor, and exotic pairs can differ in liquidity and spread. The first currency is the base currency and the second is the quote currency. Always check your broker's exact contract specifications.",
-    "candles": "<b>🕯 Candlestick Basics</b>\n\nA candlestick summarizes open, high, low, and close prices for a selected period. Patterns describe historical price behavior; they do not guarantee the next move.",
-    "structure": "<b>📈 Market Structure</b>\n\nMarket structure describes sequences such as higher highs, higher lows, lower highs, and lower lows. It is a framework for describing price behavior, not a certain forecast.",
-    "support": "<b>📏 Support & Resistance</b>\n\nSupport and resistance are price areas where market participants may have reacted before. Treat them as zones rather than exact lines because price can break or revisit them.",
-    "technical": "<b>📐 Technical Analysis</b>\n\nTechnical analysis uses historical price information to study trends, momentum, volatility, and market behavior. Common tools include moving averages, trend lines, and momentum indicators. No indicator guarantees an outcome.",
-    "fundamental": "<b>🌐 Fundamental Analysis</b>\n\nFundamental analysis examines inflation, employment, GDP, interest rates, central-bank policy, and broader economic conditions.",
-    "risk": "<b>🛡 Risk Management</b>\n\nRisk management focuses on limiting the impact of adverse outcomes. Concepts include position sizing, risk limits, stop-loss planning, leverage awareness, and keeping a trading record.",
-    "psychology": "<b>🧠 Trading Psychology</b>\n\nCommon challenges include fear of missing out, revenge trading, overtrading, and changing rules after a loss. Consistent processes and journaling can help reduce emotional decision-making.",
+    "forex": (
+        "<b>💱 What Is Forex?</b>\n\n"
+        "Forex is the market where currencies are exchanged. A currency pair such as EUR/USD "
+        "shows one currency relative to another. Prices can be affected by economic data, "
+        "interest rates, central-bank policy, sentiment, and liquidity."
+    ),
+    "pairs": (
+        "<b>💱 Currency Pairs</b>\n\n"
+        "Major, minor, and exotic pairs can differ in liquidity and spread. "
+        "The first currency is the base currency and the second is the quote currency."
+    ),
+    "candles": (
+        "<b>🕯 Candlestick Basics</b>\n\n"
+        "A candlestick summarizes open, high, low, and close prices for a selected period. "
+        "Patterns describe historical price behavior; they do not guarantee the next move."
+    ),
+    "structure": (
+        "<b>📈 Market Structure</b>\n\n"
+        "Market structure describes sequences such as higher highs, higher lows, lower highs, "
+        "and lower lows. It is a framework for describing price behavior, not a certain forecast."
+    ),
+    "risk": (
+        "<b>🛡 Risk Management</b>\n\n"
+        "Risk management focuses on limiting the impact of adverse outcomes. "
+        "Concepts include position sizing, risk limits, stop-loss planning, leverage awareness, "
+        "and keeping a trading record."
+    ),
+    "psychology": (
+        "<b>🧠 Trading Psychology</b>\n\n"
+        "Common challenges include fear of missing out, revenge trading, overtrading, "
+        "and changing rules after a loss. Consistent processes and journaling can help."
+    ),
 }
 
-GLOSSARY = {
-    "pair": "A quoted relationship between two currencies, such as EUR/USD.",
-    "pip": "A commonly used unit for describing a small change in a forex quote. Exact conventions can vary.",
-    "lot": "A standardized trading size. Contract size varies by instrument and broker.",
-    "spread": "The difference between the bid and ask price.",
-    "leverage": "A mechanism that increases market exposure relative to posted margin. It can amplify both gains and losses.",
-    "margin": "Funds required by a broker to support a leveraged position.",
-    "drawdown": "A decline from a previous peak in an account or strategy value.",
-    "stop_loss": "A rule or order intended to reduce or close exposure when a specified price condition is reached.",
-    "take_profit": "A rule or order intended to close exposure when a specified target condition is reached.",
+ANALYSIS_TEXT = (
+    "<b>📊 Analysis Basics</b>\n\n"
+    "Choose a topic to learn how traders commonly describe price behavior and economic conditions."
+)
+
+ANALYSIS = {
+    "technical": (
+        "<b>📐 Technical Analysis</b>\n\n"
+        "Technical analysis uses historical price information to study trends, momentum, "
+        "volatility, and market behavior. Common tools include moving averages, trend lines, "
+        "and momentum indicators. No indicator guarantees an outcome."
+    ),
+    "fundamental": (
+        "<b>🌐 Fundamental Analysis</b>\n\n"
+        "Fundamental analysis examines factors such as inflation, employment, GDP, "
+        "interest rates, and central-bank policy."
+    ),
+    "support": (
+        "<b>📏 Support & Resistance</b>\n\n"
+        "Support and resistance are price areas where market participants may have reacted before. "
+        "Treat them as zones rather than exact lines because price can break or revisit them."
+    ),
+    "sessions": (
+        "<b>⏰ Trading Sessions</b>\n\n"
+        "Forex is commonly discussed using Asian, London, and New York sessions. "
+        "Session overlaps can have different liquidity and volatility characteristics."
+    ),
 }
 
 
@@ -72,288 +142,296 @@ class CalcState(StatesGroup):
     position = State()
 
 
-def home_keyboard():
-    kb = ReplyKeyboardBuilder()
-    for label in ("📚 Learn Forex", "📊 Analysis Basics", "🧮 Calculators", "📖 Glossary", "🛡 Risk Management", "ℹ️ About"):
-        kb.button(text=label)
-    kb.adjust(2, 2, 2)
-    return kb.as_markup(resize_keyboard=True, is_persistent=True)
-
-
-def learn_keyboard():
+def main_menu():
     kb = InlineKeyboardBuilder()
-    items = [
-        ("💱 What Is Forex?", "forex"), ("💱 Currency Pairs", "pairs"),
-        ("🕯 Candlesticks", "candles"), ("📈 Market Structure", "structure"),
-        ("📏 Support & Resistance", "support"), ("📐 Technical Analysis", "technical"),
-        ("🌐 Fundamental Analysis", "fundamental"), ("🛡 Risk Management", "risk"),
+    kb.button(text="📚 Learn Forex", callback_data="menu:learn")
+    kb.button(text="📊 Analysis Basics", callback_data="menu:analysis")
+    kb.button(text="🧮 Calculators", callback_data="menu:calculators")
+    kb.button(text="❓ Help", callback_data="menu:help")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def learn_menu():
+    kb = InlineKeyboardBuilder()
+    for label, key in (
+        ("💱 What Is Forex?", "forex"),
+        ("💱 Currency Pairs", "pairs"),
+        ("🕯 Candlesticks", "candles"),
+        ("📈 Market Structure", "structure"),
+        ("🛡 Risk Management", "risk"),
         ("🧠 Trading Psychology", "psychology"),
-    ]
-    for label, key in items:
-        kb.button(text=label, callback_data=f"lesson:{key}")
-    kb.button(text="↩️ Home", callback_data="home")
-    kb.adjust(2, 2, 2, 2, 2, 1)
+    ):
+        kb.button(text=label, callback_data=f"learn:{key}")
+    kb.button(text="↩️ Main Menu", callback_data="home")
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 
-def analysis_keyboard():
+def analysis_menu():
     kb = InlineKeyboardBuilder()
-    for label, data in [
-        ("🕯 Candlesticks", "lesson:candles"),
-        ("📈 Market Structure", "lesson:structure"),
-        ("📏 Support & Resistance", "lesson:support"),
-        ("📐 Technical Analysis", "lesson:technical"),
-        ("🌐 Fundamental Analysis", "lesson:fundamental"),
+    for label, key in (
+        ("📐 Technical Analysis", "technical"),
+        ("🌐 Fundamental Analysis", "fundamental"),
+        ("📏 Support & Resistance", "support"),
         ("⏰ Trading Sessions", "sessions"),
-        ("📅 Economic Events", "economic"),
-        ("↩️ Home", "home"),
-    ]:
-        kb.button(text=label, callback_data=data)
-    kb.adjust(2, 2, 2, 1, 1)
+    ):
+        kb.button(text=label, callback_data=f"analysis:{key}")
+    kb.button(text="↩️ Main Menu", callback_data="home")
+    kb.adjust(2, 2, 1)
     return kb.as_markup()
 
 
-def calculator_keyboard():
+def calculator_menu():
     kb = InlineKeyboardBuilder()
-    for label, data in [
-        ("📐 Percentage", "calc:percentage"),
-        ("📏 Risk / Reward", "calc:rr"),
-        ("💰 Position Size", "calc:position"),
-        ("↩️ Home", "home"),
-    ]:
-        kb.button(text=label, callback_data=data)
-    kb.adjust(1, 1, 1, 1)
+    kb.button(text="📐 Percentage", callback_data="calc:percentage")
+    kb.button(text="📏 Risk / Reward", callback_data="calc:rr")
+    kb.button(text="💰 Position Size", callback_data="calc:position")
+    kb.button(text="↩️ Main Menu", callback_data="home")
+    kb.adjust(1)
     return kb.as_markup()
 
 
-def glossary_keyboard():
+def input_menu():
     kb = InlineKeyboardBuilder()
-    for label, key in [
-        ("Currency Pair", "pair"), ("Pip", "pip"), ("Lot", "lot"),
-        ("Spread", "spread"), ("Leverage", "leverage"), ("Margin", "margin"),
-        ("Drawdown", "drawdown"), ("Stop Loss", "stop_loss"), ("Take Profit", "take_profit"),
-    ]:
-        kb.button(text=label, callback_data=f"glossary:{key}")
-    kb.button(text="↩️ Home", callback_data="home")
-    kb.adjust(3, 3, 3, 1)
+    kb.button(text="🔁 Run Again", callback_data="calculator:again")
+    kb.button(text="↩️ Main Menu", callback_data="home")
+    kb.adjust(1)
     return kb.as_markup()
 
 
-def back_home_keyboard():
+def back_home():
     kb = InlineKeyboardBuilder()
-    kb.button(text="↩️ Home", callback_data="home")
+    kb.button(text="↩️ Main Menu", callback_data="home")
     return kb.as_markup()
+
+
+async def show_home(message: Message, state: FSMContext | None = None):
+    if state:
+        await state.clear()
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu())
 
 
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(HOME_TEXT, reply_markup=home_keyboard())
+    # CommandStart safely accepts /start with an optional payload.
+    await show_home(message, state)
 
 
 @router.message(Command("help"))
 async def help_handler(message: Message):
-    await message.answer(
-        "<b>Help</b>\n\n"
-        "/start — Open the main menu\n"
-        "/menu — Open the main menu\n"
-        "/help — Show help\n"
-        "/learn — Forex lessons\n"
-        "/calculators — Trading calculators\n"
-        "/glossary — Forex glossary\n"
-        "/risk — Risk management\n"
-        "/about — About the bot\n"
-        "/privacy — Privacy note",
-        reply_markup=home_keyboard(),
-    )
-
-
-@router.message(Command("menu"))
-@router.message(F.text == "ℹ️ Main Menu")
-async def menu_handler(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(HOME_TEXT, reply_markup=home_keyboard())
-
-
-@router.message(Command("about"))
-@router.message(F.text == "ℹ️ About")
-async def about_handler(message: Message):
-    await message.answer(
-        "<b>About Forex Academy Trader</b>\n\n"
-        "An educational Telegram bot for learning forex concepts, analysis basics, "
-        "risk management, terminology, and simple trading tools.\n\n"
-        "No profit guarantees, signal promises, or personalized investment recommendations."
-    )
-
-
-@router.message(Command("privacy"))
-async def privacy_handler(message: Message):
-    await message.answer(
-        "<b>Privacy</b>\n\n"
-        "The bot does not request passwords, broker credentials, payment details, or access to financial accounts. "
-        "Telegram may provide basic account and message metadata needed for bot operation."
-    )
-
-
-@router.message(Command("learn"))
-@router.message(F.text == "📚 Learn Forex")
-async def learn_handler(message: Message):
-    await message.answer("<b>📚 Learn Forex</b>\n\nChoose a topic:", reply_markup=learn_keyboard())
-
-
-@router.message(F.text == "📊 Analysis Basics")
-async def analysis_handler(message: Message):
-    await message.answer(
-        "<b>📊 Analysis Basics</b>\n\nExplore common ways traders describe market behavior and economic conditions.",
-        reply_markup=analysis_keyboard(),
-    )
-
-
-@router.message(Command("risk"))
-@router.message(F.text == "🛡 Risk Management")
-async def risk_handler(message: Message):
-    await message.answer(LESSONS["risk"], reply_markup=back_home_keyboard())
-
-
-@router.message(Command("calculators"))
-@router.message(F.text == "🧮 Calculators")
-async def calculators_handler(message: Message):
-    await message.answer(
-        "<b>🧮 Calculators</b>\n\nChoose a calculator. These tools perform simple educational mathematics.",
-        reply_markup=calculator_keyboard(),
-    )
-
-
-@router.message(Command("glossary"))
-@router.message(F.text == "📖 Glossary")
-async def glossary_handler(message: Message):
-    await message.answer("<b>📖 Forex Glossary</b>\n\nChoose a term:", reply_markup=glossary_keyboard())
+    await message.answer(HELP_TEXT, reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "home")
 async def home_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text(HOME_TEXT)
-    await callback.message.answer("Main menu", reply_markup=home_keyboard())
     await callback.answer()
+    await callback.message.edit_text(WELCOME_TEXT, reply_markup=main_menu())
 
 
-@router.callback_query(F.data.startswith("lesson:"))
+@router.callback_query(F.data == "menu:help")
+async def help_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(HELP_TEXT, reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "menu:learn")
+async def learn_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_text(LEARN_TEXT, reply_markup=learn_menu())
+
+
+@router.callback_query(F.data == "menu:analysis")
+async def analysis_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_text(ANALYSIS_TEXT, reply_markup=analysis_menu())
+
+
+@router.callback_query(F.data == "menu:calculators")
+async def calculators_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_text(CALCULATOR_TEXT, reply_markup=calculator_menu())
+
+
+@router.callback_query(F.data.startswith("learn:"))
 async def lesson_callback(callback: CallbackQuery):
-    key = callback.data.split(":", 1)[1]
+    key = (callback.data or "").split(":", 1)[1]
     text = LESSONS.get(key)
     if not text:
-        await callback.answer("Lesson unavailable", show_alert=True)
+        await callback.answer("That topic is unavailable.", show_alert=True)
         return
-    await callback.message.edit_text(text, reply_markup=back_home_keyboard())
     await callback.answer()
+    await callback.message.edit_text(text, reply_markup=back_home())
 
 
-@router.callback_query(F.data == "sessions")
-async def sessions_callback(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "<b>⏰ Trading Sessions</b>\n\n"
-        "Forex is commonly discussed using Asian, London, and New York sessions. "
-        "Session overlaps may have different liquidity and volatility characteristics. "
-        "Exact hours can vary with daylight-saving changes and broker schedules.",
-        reply_markup=back_home_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "economic")
-async def economic_callback(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "<b>📅 Economic Events</b>\n\n"
-        "Economic calendars commonly list inflation, employment, GDP, interest-rate decisions, "
-        "and central-bank statements. Major releases can affect volatility. Verify current schedules with a reputable live calendar.",
-        reply_markup=back_home_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("glossary:"))
-async def glossary_callback(callback: CallbackQuery):
-    key = callback.data.split(":", 1)[1]
-    explanation = GLOSSARY.get(key)
-    if not explanation:
-        await callback.answer("Term unavailable", show_alert=True)
+@router.callback_query(F.data.startswith("analysis:"))
+async def analysis_topic_callback(callback: CallbackQuery):
+    key = (callback.data or "").split(":", 1)[1]
+    text = ANALYSIS.get(key)
+    if not text:
+        await callback.answer("That topic is unavailable.", show_alert=True)
         return
-    await callback.message.edit_text(
-        f"<b>{key.replace('_', ' ').title()}</b>\n\n{explanation}",
-        reply_markup=back_home_keyboard(),
-    )
     await callback.answer()
+    await callback.message.edit_text(text, reply_markup=back_home())
 
 
 @router.callback_query(F.data == "calc:percentage")
 async def percentage_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CalcState.percentage)
-    await callback.message.edit_text("<b>📐 Percentage Calculator</b>\n\nSend: <code>value percentage</code>\nExample: <code>2500 1.5</code>")
     await callback.answer()
+    await callback.message.edit_text(
+        "<b>📐 Percentage Calculator</b>\n\n"
+        "Send two numbers: <code>value percentage</code>\n"
+        "Example: <code>2500 1.5</code>",
+        reply_markup=calculator_menu(),
+    )
 
 
 @router.callback_query(F.data == "calc:rr")
 async def rr_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CalcState.risk_reward)
-    await callback.message.edit_text("<b>📏 Risk / Reward Calculator</b>\n\nSend: <code>risk reward</code>\nExample: <code>50 100</code>")
     await callback.answer()
+    await callback.message.edit_text(
+        "<b>📏 Risk / Reward Calculator</b>\n\n"
+        "Send two positive numbers: <code>risk reward</code>\n"
+        "Example: <code>50 100</code>",
+        reply_markup=calculator_menu(),
+    )
 
 
 @router.callback_query(F.data == "calc:position")
 async def position_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CalcState.position)
+    await callback.answer()
     await callback.message.edit_text(
         "<b>💰 Position Size Calculator</b>\n\n"
-        "Send: <code>account risk_percent stop_distance</code>\nExample: <code>1000 1 50</code>\n\n"
-        "This is a simplified educational calculation."
+        "Send: <code>account risk_percent stop_distance</code>\n"
+        "Example: <code>1000 1 50</code>\n\n"
+        "This is a simplified educational calculation, not a broker-specific lot calculation.",
+        reply_markup=calculator_menu(),
     )
+
+
+@router.callback_query(F.data == "calculator:again")
+async def calculator_again_callback(callback: CallbackQuery, state: FSMContext):
+    current = await state.get_state()
     await callback.answer()
+    if current == CalcState.percentage.state:
+        await callback.message.edit_text(
+            "<b>📐 Percentage Calculator</b>\n\n"
+            "Send: <code>value percentage</code>\nExample: <code>2500 1.5</code>",
+            reply_markup=calculator_menu(),
+        )
+    elif current == CalcState.risk_reward.state:
+        await callback.message.edit_text(
+            "<b>📏 Risk / Reward Calculator</b>\n\n"
+            "Send: <code>risk reward</code>\nExample: <code>50 100</code>",
+            reply_markup=calculator_menu(),
+        )
+    elif current == CalcState.position.state:
+        await callback.message.edit_text(
+            "<b>💰 Position Size Calculator</b>\n\n"
+            "Send: <code>account risk_percent stop_distance</code>\nExample: <code>1000 1 50</code>",
+            reply_markup=calculator_menu(),
+        )
+    else:
+        await callback.message.edit_text(CALCULATOR_TEXT, reply_markup=calculator_menu())
+
+
+def parse_numbers(text: str | None, count: int) -> list[float]:
+    parts = (text or "").replace(",", ".").split()
+    if len(parts) != count:
+        raise ValueError
+    values = [float(part) for part in parts]
+    if not all(value == value and abs(value) != float("inf") for value in values):
+        raise ValueError
+    return values
 
 
 @router.message(CalcState.percentage)
 async def percentage_calculation(message: Message, state: FSMContext):
     try:
-        value, pct = map(float, (message.text or "").replace(",", ".").split())
-        await message.answer(f"<b>Result:</b> {value * pct / 100:.2f}", reply_markup=home_keyboard())
+        value, pct = parse_numbers(message.text, 2)
+        result = value * pct / 100
         await state.clear()
+        await message.answer(f"<b>Result:</b> {result:.2f}", reply_markup=input_menu())
     except (ValueError, TypeError):
-        await message.answer("Please send exactly two numbers, for example: <code>2500 1.5</code>")
+        await message.answer(
+            "That input isn't valid. Please send exactly two numbers, for example: <code>2500 1.5</code>.",
+            reply_markup=calculator_menu(),
+        )
 
 
 @router.message(CalcState.risk_reward)
 async def rr_calculation(message: Message, state: FSMContext):
     try:
-        risk, reward = map(float, (message.text or "").replace(",", ".").split())
+        risk, reward = parse_numbers(message.text, 2)
         if risk <= 0 or reward <= 0:
             raise ValueError
-        await message.answer(f"<b>Risk / Reward:</b> {reward / risk:.2f}R", reply_markup=home_keyboard())
         await state.clear()
+        await message.answer(
+            f"<b>Risk / Reward:</b> {reward / risk:.2f}R",
+            reply_markup=input_menu(),
+        )
     except (ValueError, TypeError):
-        await message.answer("Please send two positive numbers, for example: <code>50 100</code>")
+        await message.answer(
+            "That input isn't valid. Send two positive numbers, for example: <code>50 100</code>.",
+            reply_markup=calculator_menu(),
+        )
 
 
 @router.message(CalcState.position)
 async def position_calculation(message: Message, state: FSMContext):
     try:
-        account, risk_pct, stop_distance = map(float, (message.text or "").replace(",", ".").split())
-        if account <= 0 or risk_pct < 0 or stop_distance <= 0:
+        account, risk_pct, stop_distance = parse_numbers(message.text, 3)
+        if account <= 0 or risk_pct <= 0 or stop_distance <= 0:
             raise ValueError
         risk_cash = account * risk_pct / 100
         units = risk_cash / stop_distance
-        await message.answer(
-            f"<b>Risk amount:</b> {risk_cash:.2f}\n<b>Simplified units:</b> {units:.4f}\n\n"
-            "This is not a broker-specific lot calculation.",
-            reply_markup=home_keyboard(),
-        )
         await state.clear()
+        await message.answer(
+            f"<b>Risk amount:</b> {risk_cash:.2f}\n"
+            f"<b>Simplified units:</b> {units:.4f}\n\n"
+            "This is an educational calculation and not a broker-specific lot calculation.",
+            reply_markup=input_menu(),
+        )
     except (ValueError, TypeError):
-        await message.answer("Please send three valid numbers, for example: <code>1000 1 50</code>")
+        await message.answer(
+            "That input isn't valid. Send three positive numbers, for example: <code>1000 1 50</code>.",
+            reply_markup=calculator_menu(),
+        )
 
 
-@router.message(F.text)
-async def fallback_handler(message: Message):
-    await message.answer("I didn't recognize that option. Please use the menu or /help.", reply_markup=home_keyboard())
+@router.message()
+async def fallback_handler(message: Message, state: FSMContext):
+    current = await state.get_state()
+    if current:
+        await message.answer(
+            "I couldn't use that input. Please follow the format shown above or choose a calculator from the menu.",
+            reply_markup=calculator_menu(),
+        )
+        return
+    await message.answer("Please choose an option from the main menu.", reply_markup=main_menu())
+
+
+@router.errors()
+async def global_error_handler(event: ErrorEvent):
+    logger.exception("Unhandled update error", exc_info=event.exception)
+    try:
+        if event.update.callback_query:
+            await event.update.callback_query.answer(
+                "Something went wrong. Please try again.", show_alert=True
+            )
+        elif event.update.message:
+            await event.update.message.answer(
+                "Something went wrong. Please send /start and try again."
+            )
+    except TelegramAPIError:
+        logger.exception("Failed to send error response to user")
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -365,9 +443,9 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def log_message(self, format, *args):
         return
@@ -375,29 +453,24 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def start_health_server(port: int):
     server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, daemon=True, name="health-server").start()
     logger.info("Health server listening on port %s", port)
 
 
 async def configure_bot(bot: Bot):
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Open the main menu"),
-        BotCommand(command="menu", description="Open the main menu"),
-        BotCommand(command="help", description="Show help"),
-        BotCommand(command="learn", description="Forex lessons"),
-        BotCommand(command="calculators", description="Open calculators"),
-        BotCommand(command="glossary", description="Forex glossary"),
-        BotCommand(command="risk", description="Risk management"),
-        BotCommand(command="about", description="About the bot"),
-        BotCommand(command="privacy", description="Privacy note"),
-    ])
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Open the main menu"),
+            BotCommand(command="help", description="How to use the bot"),
+        ]
+    )
     await bot.set_my_short_description(
-        "Forex education, analysis concepts, risk management and practical trading calculators."
+        "Learn forex concepts, analysis basics, and use simple trading calculators."
     )
     await bot.set_my_description(
-        "Forex Academy Trader is an educational toolkit for learning forex concepts, analysis basics, "
-        "risk management, terminology and simple calculators. Educational information only; no profit guarantees "
-        "or personalized investment advice."
+        "Forex Academy Trader is a Telegram-native educational tool for learning forex concepts, "
+        "understanding analysis basics, and running simple trading calculations. "
+        "Educational information only; no profit guarantees or personalized investment advice."
     )
 
 
@@ -405,7 +478,10 @@ async def main():
     config = load_config()
     start_health_server(config.port)
 
-    bot = Bot(token=config.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(
+        token=config.token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = Dispatcher()
     dp.include_router(router)
 
